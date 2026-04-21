@@ -12,9 +12,66 @@ import { Camera, RefreshCw, CheckCircle2 } from "lucide-react";
  * 3. Ensure the UI feels premium and responsive.
  */
 
+type ScanOverlayProps = {
+  helperText: string;
+  qualityState: string;
+  pulseGuide: boolean;
+};
+
+function ScanOverlay({ helperText, qualityState, pulseGuide }: ScanOverlayProps) {
+  const qualityChipClass = (() => {
+    switch (qualityState) {
+      case "Good Capture":
+        return "bg-emerald-500/20 text-emerald-100 border-emerald-300/40";
+      case "Ready":
+        return "bg-cyan-500/20 text-cyan-100 border-cyan-300/40";
+      case "Hold Steady":
+        return "bg-amber-500/20 text-amber-100 border-amber-300/40";
+      default:
+        return "bg-zinc-500/25 text-zinc-100 border-zinc-300/35";
+    }
+  })();
+
+  return (
+    <>
+      <div className="absolute top-4 right-4 z-20 pointer-events-none">
+        <span
+          className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] sm:text-xs font-medium tracking-wide backdrop-blur-sm shadow-[0_8px_20px_rgba(0,0,0,0.32)] ${qualityChipClass}`}
+        >
+          {qualityState}
+        </span>
+      </div>
+
+      <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center p-6">
+        <div className="flex h-full w-full max-h-[24rem] max-w-[18rem] items-center justify-center rounded-[2rem] border-2 border-dashed border-zinc-500/70 bg-gradient-to-b from-zinc-900/10 via-transparent to-zinc-950/20 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]">
+          <div
+            className={`relative h-[52vw] w-[52vw] min-h-36 min-w-36 max-h-56 max-w-56 rounded-full border-[3px] border-cyan-200/75 bg-cyan-300/10 shadow-[0_0_24px_rgba(34,211,238,0.35),inset_0_0_20px_rgba(255,255,255,0.16)] transition-transform duration-200 ${
+              pulseGuide ? "scale-105" : "scale-100"
+            }`}
+          >
+            <div className="absolute inset-3 rounded-full border border-white/30" />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-[10px] text-cyan-100/90 uppercase tracking-[0.2em]">
+                Align Mouth
+              </span>
+            </div>
+          </div>
+        </div>
+        <div className="absolute bottom-7 left-1/2 max-w-[86%] -translate-x-1/2 rounded-full border border-white/15 bg-black/60 px-3 py-2 backdrop-blur-md shadow-[0_8px_20px_rgba(0,0,0,0.35)]">
+          <p className="text-center text-[11px] font-medium tracking-wide text-cyan-50 sm:text-xs">
+            {helperText}
+          </p>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function ScanningFlow() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const [camReady, setCamReady] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const [capturedImages, setCapturedImages] = useState<string[]>([]);
   const [currentStep, setCurrentStep] = useState(0);
   const [showGoodCapture, setShowGoodCapture] = useState(false);
@@ -43,34 +100,55 @@ export default function ScanningFlow() {
     if (currentStep === 0) return "Ready";
     return "Hold Steady";
   }, [camReady, currentStep, showGoodCapture]);
-  const qualityChipClass = useMemo(() => {
-    switch (qualityState) {
-      case "Good Capture":
-        return "bg-emerald-500/20 text-emerald-100 border-emerald-300/40";
-      case "Ready":
-        return "bg-cyan-500/20 text-cyan-100 border-cyan-300/40";
-      case "Hold Steady":
-        return "bg-amber-500/20 text-amber-100 border-amber-300/40";
-      default:
-        return "bg-zinc-500/25 text-zinc-100 border-zinc-300/35";
+
+  const stopCameraStream = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
     }
-  }, [qualityState]);
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  }, []);
+
+  const startCamera = useCallback(async () => {
+    setCameraError(null);
+    setCamReady(false);
+    stopCameraStream();
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError("Camera is not supported on this browser or device.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        setCamReady(true);
+      }
+    } catch (err) {
+      console.error("Camera access denied", err);
+      setCamReady(false);
+      const errorName = err instanceof DOMException ? err.name : "";
+      if (errorName === "NotAllowedError") {
+        setCameraError("Camera access is blocked. Please allow camera permission and try again.");
+      } else if (errorName === "NotFoundError") {
+        setCameraError("No camera was found on this device. Connect a camera and retry.");
+      } else {
+        setCameraError("We couldn't start your camera. Please check permissions and try again.");
+      }
+    }
+  }, [stopCameraStream]);
 
   // Initialize Camera
   useEffect(() => {
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          setCamReady(true);
-        }
-      } catch (err) {
-        console.error("Camera access denied", err);
-      }
-    }
     startCamera();
-  }, []);
+    return () => {
+      stopCameraStream();
+    };
+  }, [startCamera, stopCameraStream]);
 
   const handleCapture = useCallback(() => {
     // Boilerplate logic for capturing a frame from the video feed
@@ -102,106 +180,122 @@ export default function ScanningFlow() {
   }, []);
 
   return (
-    <div className="flex flex-col items-center bg-black min-h-screen text-white">
+    <div className="min-h-screen bg-gradient-to-b from-zinc-950 via-black to-zinc-950 text-white">
+      <div className="mx-auto flex w-full max-w-md flex-col">
       {/* Header */}
-      <div className="p-4 w-full bg-zinc-900 border-b border-zinc-800 flex justify-between">
-        <h1 className="font-bold text-blue-400">DentalScan AI</h1>
-        {isScanComplete ? (
-          <span className="text-xs text-emerald-400">Completed</span>
-        ) : (
-          <span className="text-xs text-zinc-500">Step {currentStep + 1}/{totalSteps}</span>
-        )}
+      <div className="w-full px-4 pt-5 pb-4">
+        <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/80 px-4 py-3 backdrop-blur-sm shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
+          <div className="flex items-center justify-between">
+            <h1 className="text-sm font-semibold tracking-wide text-cyan-300">DentalScan AI</h1>
+            {isScanComplete ? (
+              <span className="rounded-full border border-emerald-300/35 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-200">
+                Completed
+              </span>
+            ) : (
+              <span className="text-xs font-medium text-zinc-400">Step {currentStep + 1}/{totalSteps}</span>
+            )}
+          </div>
+          <p className="mt-1 text-[11px] text-zinc-500">
+            {!isScanComplete ? "Follow the guide and capture each angle clearly." : "All scan views captured successfully."}
+          </p>
+        </div>
       </div>
 
       {/* Main Viewport */}
-      <div className="relative w-full max-w-md aspect-[3/4] bg-zinc-950 overflow-hidden flex items-center justify-center">
+      <div className="relative mx-4 aspect-[3/4] overflow-hidden rounded-[1.75rem] border border-zinc-800/80 bg-zinc-950 shadow-[0_24px_50px_rgba(0,0,0,0.45)] flex items-center justify-center">
         {!isScanComplete ? (
-          <>
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
-              className="w-full h-full object-cover grayscale opacity-80" 
-            />
-            <div
-              className={`absolute inset-0 z-30 pointer-events-none bg-white transition-opacity duration-200 ${
-                showCaptureFlash ? "opacity-35" : "opacity-0"
-              }`}
-            />
-
-            <div className="absolute top-4 right-4 z-20 pointer-events-none">
-              <span
-                className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] sm:text-xs font-medium tracking-wide backdrop-blur-sm shadow-[0_8px_20px_rgba(0,0,0,0.32)] ${qualityChipClass}`}
-              >
-                {qualityState}
-              </span>
-            </div>
-             
-            {/* Guidance Overlay */}
-            <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center p-6">
-              <div className="w-full h-full max-w-[18rem] max-h-[24rem] rounded-[2rem] border-2 border-dashed border-zinc-500/70 bg-gradient-to-b from-zinc-800/10 to-transparent shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)] flex items-center justify-center">
-                <div
-                  className={`relative w-[52vw] h-[52vw] max-w-56 max-h-56 min-w-36 min-h-36 rounded-full border-[3px] border-cyan-200/75 bg-cyan-300/10 shadow-[0_0_24px_rgba(34,211,238,0.35),inset_0_0_20px_rgba(255,255,255,0.16)] transition-transform duration-200 ${
-                    pulseGuide ? "scale-105" : "scale-100"
-                  }`}
-                >
-                  <div className="absolute inset-3 rounded-full border border-white/30" />
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="text-[10px] text-cyan-100/90 uppercase tracking-[0.2em]">
-                      Align Mouth
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <div className="absolute bottom-7 left-1/2 -translate-x-1/2 max-w-[86%] px-3 py-2 rounded-full bg-black/55 border border-white/15 backdrop-blur-sm shadow-[0_8px_20px_rgba(0,0,0,0.35)]">
-                <p className="text-[11px] sm:text-xs text-cyan-50 text-center font-medium tracking-wide">
-                  {STEP_HELPERS[currentStep] ?? "Center your mouth in the guide"}
+          cameraError ? (
+            <div className="w-full h-full flex items-center justify-center p-6">
+              <div className="w-full max-w-sm rounded-2xl border border-zinc-700/80 bg-zinc-900/90 p-5 text-center shadow-[0_18px_40px_rgba(0,0,0,0.45)]">
+                <h3 className="text-base font-semibold text-white">Camera access needed</h3>
+                <p className="mt-2 text-sm text-zinc-300">{cameraError}</p>
+                <p className="mt-2 text-xs text-zinc-400">
+                  Allow camera permission in your browser settings, then retry.
                 </p>
+                <button
+                  type="button"
+                  onClick={startCamera}
+                  className="mt-4 inline-flex items-center gap-2 rounded-full border border-cyan-300/40 bg-cyan-500/15 px-4 py-2 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/25"
+                >
+                  <RefreshCw size={14} />
+                  Retry Camera
+                </button>
               </div>
             </div>
+          ) : (
+            <>
+              <video 
+                ref={videoRef} 
+                autoPlay 
+                playsInline 
+                className="h-full w-full object-cover opacity-85" 
+              />
+              <div
+                className={`absolute inset-0 z-30 pointer-events-none bg-white transition-opacity duration-200 ${
+                  showCaptureFlash ? "opacity-35" : "opacity-0"
+                }`}
+              />
+              <ScanOverlay
+                helperText={STEP_HELPERS[currentStep] ?? "Center your mouth in the guide"}
+                qualityState={qualityState}
+                pulseGuide={pulseGuide}
+              />
 
-            {/* Instruction Overlay */}
-            <div className="absolute bottom-10 left-0 right-0 p-6 bg-gradient-to-t from-black to-transparent text-center">
-              <p className="text-sm font-medium">{VIEWS[currentStep].instruction}</p>
-            </div>
-          </>
+              {/* Instruction Overlay */}
+              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black via-black/70 to-transparent px-5 pb-5 pt-14 text-center">
+                <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-400">{VIEWS[currentStep].label}</p>
+                <p className="mt-1 text-sm font-medium leading-relaxed text-zinc-100">{VIEWS[currentStep].instruction}</p>
+              </div>
+            </>
+          )
         ) : (
-          <div className="text-center p-10">
-            <CheckCircle2 size={48} className="text-green-500 mx-auto mb-4" />
-            <h2 className="text-xl font-bold">Scan Complete</h2>
-            <p className="text-zinc-400 mt-2">Uploading results...</p>
+          <div className="p-10 text-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border border-emerald-300/35 bg-emerald-500/15 shadow-[0_12px_24px_rgba(16,185,129,0.25)]">
+              <CheckCircle2 size={34} className="text-emerald-300" />
+            </div>
+            <h2 className="text-2xl font-semibold tracking-tight">Scan Complete</h2>
+            <p className="mt-2 text-sm text-zinc-300">Uploading your results securely...</p>
           </div>
         )}
       </div>
 
       {/* Controls */}
-      <div className="p-10 w-full flex justify-center">
-        {!isScanComplete && (
+      <div className="flex w-full justify-center px-4 pb-5 pt-6">
+        {!isScanComplete && !cameraError && (
           <button
             onClick={handleCapture}
-            className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center active:scale-90 transition-transform"
+            className="flex h-20 w-20 items-center justify-center rounded-full border-4 border-white/90 bg-zinc-900/75 shadow-[0_14px_30px_rgba(0,0,0,0.45)] transition-transform active:scale-90"
           >
-            <div className="w-16 h-16 rounded-full bg-white flex items-center justify-center">
-               <Camera className="text-black" />
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-white">
+               <Camera className="text-black" size={19} />
             </div>
           </button>
         )}
       </div>
 
       {/* Thumbnails */}
-      <div className="flex gap-2 p-4 overflow-x-auto w-full">
+      <div className="w-full border-t border-zinc-800/70 bg-zinc-950/55 px-4 pb-4 pt-3">
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-500">Captured Views</p>
+          <p className="text-[11px] text-zinc-500">{capturedImages.length}/{totalSteps}</p>
+        </div>
+        <div className="flex w-full gap-2 overflow-x-auto pb-1">
         {VIEWS.map((v, i) => (
           <div 
             key={i} 
-            className={`w-16 h-20 rounded border-2 shrink-0 ${i === currentStep ? 'border-blue-500 bg-blue-500/10' : 'border-zinc-800'}`}
+            className={`w-16 h-20 shrink-0 overflow-hidden rounded-lg border-2 transition-colors ${
+              i === currentStep ? "border-cyan-400 bg-cyan-500/10" : capturedImages[i] ? "border-emerald-400/50" : "border-zinc-800"
+            }`}
           >
             {capturedImages[i] ? (
-               <img src={capturedImages[i]} className="w-full h-full object-cover" />
+               <img src={capturedImages[i]} alt={`${v.label} capture`} className="h-full w-full object-cover" />
             ) : (
-               <div className="w-full h-full flex items-center justify-center text-[10px] text-zinc-700">{i+1}</div>
+               <div className="flex h-full w-full items-center justify-center text-[10px] text-zinc-700">{i+1}</div>
             )}
           </div>
         ))}
+        </div>
+      </div>
       </div>
     </div>
   );
