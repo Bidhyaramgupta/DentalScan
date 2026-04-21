@@ -41,4 +41,16 @@ Implement a messaging sidebar on the result page.
 - Include a 2-minute Loom video demoing your changes.
 - Email your repo link to `rachana@dentalscan.us`.
 
+## Manual End-to-End Verification Checklist
+1. Start at `/` and complete all 5 capture angles (Front, Left, Right, Upper, Lower).
+2. Confirm the scan screen shows the guidance overlay and quality state chip updates during capture.
+3. On the final capture, confirm real completion flow runs (not just static text): prepare/submit/notify states appear.
+4. Verify a `Scan` row is created in Prisma (status completed with stored image payload).
+5. Verify a `Notification` row is created in Prisma for the completed scan.
+6. Confirm app navigates to `/results` automatically after successful submit + notify.
+7. Confirm results page shows real scan context (scan id, status, created time, image count/thumbnails).
+8. Confirm the Quick Message sidebar loads immediately on results.
+9. Send a patient message and verify it persists in Prisma (`Message` linked to a `Thread`).
+10. Refresh `/results` and confirm scan context + messaging history still load from persisted data.
+
 **Happy Coding!**

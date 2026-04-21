@@ -18,6 +18,7 @@ type ChatMessage = {
 
 type MessageSidebarProps = {
   initialThreadId?: MessagingThreadId;
+  scanId?: string;
 };
 
 function formatMessage(apiMessage: MessagingApiMessage): ChatMessage {
@@ -32,7 +33,7 @@ function formatMessage(apiMessage: MessagingApiMessage): ChatMessage {
   };
 }
 
-export default function MessageSidebar({ initialThreadId }: MessageSidebarProps) {
+export default function MessageSidebar({ initialThreadId, scanId }: MessageSidebarProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [threadId, setThreadId] = useState<MessagingThreadId | null>(initialThreadId ?? null);
@@ -159,7 +160,9 @@ export default function MessageSidebar({ initialThreadId }: MessageSidebarProps)
       </div>
 
       <p className="mt-2 text-sm text-zinc-400">
-        Chat quickly with your dentist about your latest scan.
+        {scanId
+          ? `Message the clinic about this scan (${scanId.slice(0, 8)}...).`
+          : "Chat quickly with your dentist about your latest scan."}
       </p>
 
       <div

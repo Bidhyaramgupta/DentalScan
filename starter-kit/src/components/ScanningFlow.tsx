@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Camera, RefreshCw, CheckCircle2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 /**
  * CHALLENGE: SCAN ENHANCEMENT
@@ -17,6 +18,8 @@ type ScanOverlayProps = {
   qualityState: string;
   pulseGuide: boolean;
 };
+
+const DEMO_USER_ID = "demo-patient";
 
 function ScanOverlay({ helperText, qualityState, pulseGuide }: ScanOverlayProps) {
   const qualityChipClass = (() => {
@@ -68,8 +71,12 @@ function ScanOverlay({ helperText, qualityState, pulseGuide }: ScanOverlayProps)
 }
 
 export default function ScanningFlow() {
+  const router = useRouter();
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const completionFlowLockRef = useRef(false);
+  const createdScanIdRef = useRef<string | null>(null);
+  const notifiedScanIdRef = useRef<string | null>(null);
   const [camReady, setCamReady] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [capturedImages, setCapturedImages] = useState<string[]>([]);
@@ -77,6 +84,9 @@ export default function ScanningFlow() {
   const [showGoodCapture, setShowGoodCapture] = useState(false);
   const [showCaptureFlash, setShowCaptureFlash] = useState(false);
   const [pulseGuide, setPulseGuide] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submissionStage, setSubmissionStage] = useState<"creating" | "notifying" | "navigating" | null>(null);
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
 
   const VIEWS = [
     { label: "Front View", instruction: "Smile and look straight at the camera." },
@@ -150,10 +160,99 @@ export default function ScanningFlow() {
     };
   }, [startCamera, stopCameraStream]);
 
+  const handleScanComplete = useCallback(async (finalImages: string[]) => {
+    // Synchronous lock to prevent duplicate runs before React state updates flush.
+    if (completionFlowLockRef.current || isSubmitting) return;
+    completionFlowLockRef.current = true;
+
+    setIsSubmitting(true);
+    setSubmissionStage("creating");
+    setSubmissionError(null);
+    stopCameraStream();
+
+    try {
+      const images = finalImages.filter(Boolean);
+      if (images.length === 0) {
+        throw new Error("No captured images found");
+      }
+
+      // 1) Create scan
+      let scanId = createdScanIdRef.current;
+      if (!scanId) {
+        const scanResponse = await fetch("/api/scans", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            userId: DEMO_USER_ID,
+            status: "completed",
+            images,
+          }),
+        });
+
+        if (!scanResponse.ok) {
+          throw new Error("Failed to submit scan");
+        }
+
+        const scanPayload = (await scanResponse.json()) as {
+          scanId?: string;
+          scan?: { id?: string };
+        };
+        scanId = (scanPayload.scanId ?? scanPayload.scan?.id ?? "").trim();
+        if (!scanId) {
+          throw new Error("Missing scan id after submission");
+        }
+      }
+
+      if (!scanId) {
+        throw new Error("Missing scan id after submission");
+      }
+
+      createdScanIdRef.current = scanId;
+
+      // 2) Trigger clinic notification
+      setSubmissionStage("notifying");
+      if (notifiedScanIdRef.current !== scanId) {
+        const notifyResponse = await fetch("/api/notify", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            scanId,
+            userId: DEMO_USER_ID,
+            status: "completed",
+          }),
+        });
+
+        if (!notifyResponse.ok) {
+          throw new Error("Failed to create completion notification");
+        }
+
+        notifiedScanIdRef.current = scanId;
+      }
+
+      // 3) Navigate to results
+      setSubmissionStage("navigating");
+      const params = new URLSearchParams({
+        scanId,
+        status: "completed",
+        imageCount: String(images.length),
+      });
+      router.push(`/results?${params.toString()}`);
+    } catch (err) {
+      console.error("Scan completion failed", err);
+      setSubmissionError("Something went wrong. Please try again.");
+      setSubmissionStage(null);
+      setIsSubmitting(false);
+      completionFlowLockRef.current = false;
+    }
+  }, [isSubmitting, router, stopCameraStream]);
+
   const handleCapture = useCallback(() => {
-    // Boilerplate logic for capturing a frame from the video feed
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || isSubmitting) return;
 
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
@@ -162,7 +261,13 @@ export default function ScanningFlow() {
     if (ctx) {
       ctx.drawImage(video, 0, 0);
       const dataUrl = canvas.toDataURL("image/jpeg");
-      setCapturedImages((prev) => [...prev, dataUrl]);
+      setCapturedImages((prev) => {
+        const updatedImages = [...prev, dataUrl];
+        if (updatedImages.length === totalSteps) {
+          void handleScanComplete(updatedImages);
+        }
+        return updatedImages;
+      });
       setCurrentStep((prev) => prev + 1);
       setShowGoodCapture(true);
       setShowCaptureFlash(true);
@@ -177,7 +282,7 @@ export default function ScanningFlow() {
         setShowGoodCapture(false);
       }, 1200);
     }
-  }, []);
+  }, [handleScanComplete, isSubmitting, totalSteps]);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-zinc-950 via-black to-zinc-950 text-white">
@@ -254,7 +359,29 @@ export default function ScanningFlow() {
               <CheckCircle2 size={34} className="text-emerald-300" />
             </div>
             <h2 className="text-2xl font-semibold tracking-tight">Scan Complete</h2>
-            <p className="mt-2 text-sm text-zinc-300">Uploading your results securely...</p>
+            <p className="mt-2 text-sm text-zinc-300">
+              {submissionError
+                ? submissionError
+                : submissionStage === "creating"
+                  ? "Submitting scan..."
+                  : submissionStage === "notifying"
+                    ? "Notifying your clinic..."
+                    : submissionStage === "navigating"
+                      ? "Opening results..."
+                      : isSubmitting
+                        ? "Submitting scan..."
+                  : "Preparing scan..."}
+            </p>
+            {submissionError && (
+              <button
+                type="button"
+                onClick={() => void handleScanComplete(capturedImages)}
+                className="mt-4 inline-flex items-center gap-2 rounded-full border border-cyan-300/40 bg-cyan-500/15 px-4 py-2 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/25"
+              >
+                <RefreshCw size={14} />
+                Retry Submission
+              </button>
+            )}
           </div>
         )}
       </div>
