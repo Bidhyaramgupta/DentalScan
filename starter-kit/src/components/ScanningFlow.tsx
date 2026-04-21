@@ -35,6 +35,8 @@ export default function ScanningFlow() {
     "Move slightly closer and tilt up",
     "Move slightly closer and tilt down",
   ];
+  const totalSteps = VIEWS.length;
+  const isScanComplete = currentStep >= totalSteps;
   const qualityState = useMemo(() => {
     if (showGoodCapture) return "Good Capture";
     if (!camReady) return "Adjust Position";
@@ -104,12 +106,16 @@ export default function ScanningFlow() {
       {/* Header */}
       <div className="p-4 w-full bg-zinc-900 border-b border-zinc-800 flex justify-between">
         <h1 className="font-bold text-blue-400">DentalScan AI</h1>
-        <span className="text-xs text-zinc-500">Step {currentStep + 1}/5</span>
+        {isScanComplete ? (
+          <span className="text-xs text-emerald-400">Completed</span>
+        ) : (
+          <span className="text-xs text-zinc-500">Step {currentStep + 1}/{totalSteps}</span>
+        )}
       </div>
 
       {/* Main Viewport */}
       <div className="relative w-full max-w-md aspect-[3/4] bg-zinc-950 overflow-hidden flex items-center justify-center">
-        {currentStep < 5 ? (
+        {!isScanComplete ? (
           <>
             <video 
               ref={videoRef} 
@@ -170,7 +176,7 @@ export default function ScanningFlow() {
 
       {/* Controls */}
       <div className="p-10 w-full flex justify-center">
-        {currentStep < 5 && (
+        {!isScanComplete && (
           <button
             onClick={handleCapture}
             className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center active:scale-90 transition-transform"
